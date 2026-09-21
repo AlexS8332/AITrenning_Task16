@@ -1,0 +1,16 @@
+{
+    "num":  "16",
+    "slug":  "aitrenning-task16",
+    "title":  "MCP-сервер справочника по животным и минимальный клиент (Go)",
+    "stack":  "go",
+    "status":  "planned",
+    "created":  "2026-09-21",
+    "updated":  "2026-09-21",
+    "repo":  "",
+    "env":  [
+
+            ],
+    "tags":  [
+
+             ]
+}
