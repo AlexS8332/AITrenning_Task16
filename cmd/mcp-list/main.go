@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,32 @@ import (
 // defaultServer — сервер из этого репозитория. `go run` вместо готового
 // бинарника, чтобы клиент работал сразу после клонирования.
 var defaultServer = []string{"go", "run", "./cmd/animals-mcp"}
+
+// serverPackage — каталог пакета сервера относительно корня репозитория.
+const serverPackage = "cmd/animals-mcp"
+
+// repoRoot ищет корень репозитория вверх от рабочего каталога.
+//
+// Рабочий каталог клиенту никто не гарантирует: отладчик VS Code
+// запускает программу из каталога её пакета, и относительный путь
+// `./cmd/animals-mcp` оттуда никуда не ведёт. Поэтому корень находим
+// сами и запускаем сервер из него.
+func repoRoot() (string, bool) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(serverPackage))); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
 
 // demoCalls — проверочные вызовы после получения списка. Список
 // инструментов сам по себе ещё не доказывает, что сервер работает:
@@ -63,15 +90,25 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	command := flag.Args()
+	// Свою команду запускаем как есть, в текущем каталоге. Для сервера
+	// из этого репозитория каталог выбираем сами: относительный путь к
+	// его пакету имеет смысл только из корня.
+	command, dir := flag.Args(), ""
 	if len(command) == 0 {
-		command = defaultServer
+		root, ok := repoRoot()
+		if !ok {
+			fmt.Fprintf(os.Stderr, "ошибка: не нашёл каталог %s ни в рабочем каталоге, ни выше по дереву.\n", serverPackage)
+			fmt.Fprintln(os.Stderr, "Запустите клиента из репозитория или передайте команду сервера аргументом:")
+			fmt.Fprintln(os.Stderr, "  mcp-list -- путь/к/animals-mcp")
+			os.Exit(1)
+		}
+		command, dir = defaultServer, root
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	if err := run(ctx, command, options{
+	if err := run(ctx, command, dir, options{
 		schemas: *schemas,
 		call:    *call,
 		args:    *args,
@@ -91,10 +128,11 @@ type options struct {
 	full    bool
 }
 
-func run(ctx context.Context, command []string, o options) error {
+func run(ctx context.Context, command []string, dir string, o options) error {
 	// 1. Соединение. Клиент запускает сервер и говорит с ним по stdio;
 	// stderr сервера остаётся нашим, поэтому его сообщения видно.
 	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
 
 	client := mcp.NewClient(&mcp.Implementation{
@@ -106,6 +144,12 @@ func run(ctx context.Context, command []string, o options) error {
 	section("Соединение")
 	field("транспорт", "stdio, сервер запущен дочерним процессом")
 	field("команда", strings.Join(command, " "))
+	// Каталог называем, только когда он не совпадает с текущим: это
+	// диагностика для запуска из отладчика или из подкаталога, а при
+	// обычном запуске из корня строка была бы шумом.
+	if cwd, err := os.Getwd(); err == nil && dir != "" && dir != cwd {
+		field("каталог", dir)
+	}
 
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
