@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,11 +22,19 @@ type replSession struct {
 	client *mcp.ClientSession
 	tools  []*mcp.Tool
 	full   bool
-	out    io.Writer
+	// timeout — предел на один вызов, а не на весь сеанс: между
+	// командами человек думает сколько угодно, и общий дедлайн
+	// превратил бы все вызовы после раздумий в «context deadline
+	// exceeded».
+	timeout time.Duration
+	out     io.Writer
 }
 
-func repl(ctx context.Context, client *mcp.ClientSession, tools []*mcp.Tool, full bool) error {
-	r := &replSession{client: client, tools: tools, full: full, out: os.Stdout}
+func repl(ctx context.Context, client *mcp.ClientSession, tools []*mcp.Tool, full bool, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	r := &replSession{client: client, tools: tools, full: full, timeout: timeout, out: os.Stdout}
 
 	fmt.Println()
 	section("Ручной режим")
@@ -130,7 +140,17 @@ func (r *replSession) call(ctx context.Context, name, rawArgs string) error {
 	if err != nil {
 		return err
 	}
-	return callTool(ctx, r.client, name, args, r.full)
+
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	if err := callTool(ctx, r.client, name, args, r.full); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("%s не ответил за %s (предел задаёт флаг -timeout)", name, r.timeout)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *replSession) tool(name string) (*mcp.Tool, bool) {
@@ -199,7 +219,7 @@ func (r *replSession) info(ctx context.Context) error {
 	// Сведения о себе сервер тоже отдаёт инструментом — спросим и его,
 	// если он есть: там путь к базе и счётчик вызовов.
 	if _, ok := r.tool("server_info"); ok {
-		return callTool(ctx, r.client, "server_info", nil, r.full)
+		return r.call(ctx, "server_info", "")
 	}
 	return nil
 }

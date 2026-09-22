@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -87,7 +88,7 @@ func main() {
 		noDemo   = flag.Bool("no-demo", false, "не делать проверочные вызовы, только список инструментов")
 		interact = flag.Bool("i", false, "ручной режим: вводить команды и вызовы с клавиатуры")
 		full     = flag.Bool("full", false, "печатать результаты вызовов целиком, без обрезки")
-		timeout  = flag.Duration("timeout", 2*time.Minute, "предельное время работы")
+		timeout  = flag.Duration("timeout", 2*time.Minute, "предел времени: на всю работу, а в ручном режиме — на каждый вызов")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -107,8 +108,18 @@ func main() {
 		command, dir = defaultServer, root
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
+	// Ctrl+C прерывает и долгий вызов, и ожидание ввода.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	// Общий предел времени — только для пакетных запусков. В ручном
+	// режиме человек думает между командами сколько хочет, а таймаут
+	// отсчитывается на каждый вызов отдельно.
+	if !*interact {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
 
 	if err := run(ctx, command, dir, options{
 		schemas:     *schemas,
@@ -117,6 +128,7 @@ func main() {
 		noDemo:      *noDemo,
 		full:        *full,
 		interactive: *interact,
+		timeout:     *timeout,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(1)
@@ -130,6 +142,7 @@ type options struct {
 	noDemo      bool
 	full        bool
 	interactive bool
+	timeout     time.Duration
 }
 
 func run(ctx context.Context, command []string, dir string, o options) error {
@@ -209,7 +222,7 @@ func run(ctx context.Context, command []string, dir string, o options) error {
 
 	// 5. Ручной режим: дальше команды набирает человек.
 	if o.interactive {
-		return repl(ctx, session, tools, o.full)
+		return repl(ctx, session, tools, o.full, o.timeout)
 	}
 	if o.noDemo {
 		return nil
