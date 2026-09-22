@@ -3,9 +3,9 @@
     "slug":  "aitrenning-task16",
     "title":  "MCP-сервер справочника по животным и минимальный клиент (Go)",
     "stack":  "go",
-    "status":  "in-progress",
+    "status":  "done",
     "created":  "2026-09-21",
-    "updated":  "2026-09-21",
+    "updated":  "2026-09-22",
     "repo":  "https://github.com/AlexS8332/AITrenning_Task16",
     "env":  [
 
