@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,13 +21,20 @@ import (
 func connect(t *testing.T, o Options) *mcp.ClientSession {
 	t.Helper()
 
-	srv, err := New(o)
+	ctx := t.Context()
+	if o.Store == nil && o.DBPath == "" {
+		// У каждого теста своя база во временном файле: тесты не должны
+		// видеть правок друг друга, а запись здесь проверяется всерьёз.
+		o.DBPath = filepath.Join(t.TempDir(), "animals.db")
+	}
+
+	srv, err := New(ctx, o)
 	if err != nil {
 		t.Fatalf("сервер не собрался: %v", err)
 	}
+	t.Cleanup(func() { srv.Close() })
 
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	ctx := t.Context()
 	if _, err := srv.MCP().Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatalf("сервер не принял соединение: %v", err)
 	}
@@ -93,9 +101,10 @@ func TestInitializeAndListTools(t *testing.T) {
 	}
 
 	want := []string{
-		"compare_animals", "get_animal", "list_animals", "match_taxon",
-		"random_animal", "read_wikipedia", "search_animals", "search_wikipedia",
-		"server_info", "taxon_tree", "vernacular_names",
+		"add_animal", "compare_animals", "delete_animal", "get_animal",
+		"list_animals", "match_taxon", "random_animal", "read_wikipedia",
+		"search_animals", "search_wikipedia", "server_info", "taxon_tree",
+		"update_animal", "vernacular_names",
 	}
 	got := make([]string, 0, len(res.Tools))
 	for _, tool := range res.Tools {
@@ -134,6 +143,9 @@ func TestInputSchemaDeclaresRequiredArgs(t *testing.T) {
 		"vernacular_names": {"usage_key"},
 		"server_info":      nil,
 		"random_animal":    nil,
+		"add_animal":       {"class", "id", "name", "scientific_name"},
+		"update_animal":    {"animal"},
+		"delete_animal":    {"animal"},
 	}
 
 	for _, tool := range res.Tools {
@@ -323,11 +335,14 @@ func TestServerInfoCountsCalls(t *testing.T) {
 	if info.Version != "1.2.3" || info.Server != Name {
 		t.Errorf("получили %s %s", info.Server, info.Version)
 	}
-	if len(info.Tools) != 11 {
+	if len(info.Tools) != 14 {
 		t.Errorf("инструментов %d: %v", len(info.Tools), info.Tools)
 	}
 	if info.Catalog.Animals == 0 || len(info.Catalog.Classes) == 0 {
 		t.Errorf("пустая сводка по справочнику: %+v", info.Catalog)
+	}
+	if info.Catalog.Database == "" {
+		t.Error("server_info не назвал файл базы")
 	}
 	if info.Calls["random_animal"] != 2 {
 		t.Errorf("random_animal вызван %d раз, ожидалось 2", info.Calls["random_animal"])
@@ -509,5 +524,140 @@ func TestStructuredContentMatchesText(t *testing.T) {
 	}
 	if fromText["server"] != fromStructured["server"] {
 		t.Errorf("текст и структура разошлись: %v и %v", fromText["server"], fromStructured["server"])
+	}
+}
+
+// Инструменты записи проверяются через протокол целиком: вызов меняет
+// базу, а следующий вызов на чтение это видит. Сервер в тесте держит
+// свою временную базу, так что портить нечего.
+func TestWriteTools(t *testing.T) {
+	session := connect(t, Options{})
+
+	newcomer := map[string]any{
+		"id":              "platypus",
+		"name":            "Утконос",
+		"scientific_name": "Ornithorhynchus anatinus",
+		"class":           "млекопитающие",
+		"diet":            "хищник",
+		"habitats":        []any{"река"},
+		"regions":         []any{"Австралия"},
+		"food":            []any{"личинки", "черви"},
+		"weight_kg":       map[string]any{"min": 0.7, "max": 2.4},
+		"lifespan_years":  17,
+	}
+
+	t.Run("добавление", func(t *testing.T) {
+		var before, after ServerInfo
+		call(t, session, "server_info", nil, &before)
+
+		var out WriteOut
+		call(t, session, "add_animal", newcomer, &out)
+		if out.Done != "added" || out.Animal == nil || out.Animal.ID != "platypus" {
+			t.Fatalf("получили %+v", out)
+		}
+		if len(out.Animal.Food) != 2 || out.Animal.WeightKg.Max != 2.4 {
+			t.Errorf("запись сохранилась не полностью: %+v", out.Animal)
+		}
+
+		call(t, session, "server_info", nil, &after)
+		if after.Catalog.Animals != before.Catalog.Animals+1 {
+			t.Errorf("записей стало %d, было %d", after.Catalog.Animals, before.Catalog.Animals)
+		}
+
+		// Новая запись должна находиться обычным чтением.
+		var got GetOut
+		call(t, session, "get_animal", map[string]any{"animal": "Утконос"}, &got)
+		if !got.Found {
+			t.Error("добавленная запись не читается через get_animal")
+		}
+	})
+
+	t.Run("повторное добавление отклоняется", func(t *testing.T) {
+		res := call(t, session, "add_animal", newcomer, nil)
+		if !res.IsError {
+			t.Fatal("сервер переписал существующую запись")
+		}
+		if !strings.Contains(text(res), "update_animal") {
+			t.Errorf("в отказе нет подсказки: %s", text(res))
+		}
+	})
+
+	t.Run("изменение", func(t *testing.T) {
+		var out WriteOut
+		call(t, session, "update_animal", map[string]any{
+			"animal":              "platypus",
+			"conservation_status": "VU",
+			"food":                []any{"личинки"},
+		}, &out)
+
+		if out.Done != "updated" || out.Animal.Conservation != "VU" {
+			t.Fatalf("получили %+v", out)
+		}
+		if len(out.Animal.Food) != 1 {
+			t.Errorf("список заменился не целиком: %v", out.Animal.Food)
+		}
+		// Непереданные поля остаются прежними.
+		if out.Animal.Name != "Утконос" || len(out.Animal.Habitats) != 1 {
+			t.Errorf("изменение задело чужие поля: %+v", out.Animal)
+		}
+	})
+
+	t.Run("изменение без полей", func(t *testing.T) {
+		res := call(t, session, "update_animal", map[string]any{"animal": "platypus"}, nil)
+		if !res.IsError {
+			t.Fatal("пустое изменение прошло")
+		}
+	})
+
+	t.Run("удаление", func(t *testing.T) {
+		var out WriteOut
+		call(t, session, "delete_animal", map[string]any{"animal": "Утконос"}, &out)
+		if out.Done != "deleted" || out.Animal == nil || out.Animal.ID != "platypus" {
+			t.Fatalf("получили %+v", out)
+		}
+
+		var got GetOut
+		call(t, session, "get_animal", map[string]any{"animal": "platypus"}, &got)
+		if got.Found {
+			t.Error("удалённая запись всё ещё читается")
+		}
+
+		res := call(t, session, "delete_animal", map[string]any{"animal": "platypus"}, nil)
+		if !res.IsError {
+			t.Fatal("повторное удаление прошло без ошибки")
+		}
+	})
+}
+
+// Аннотации инструментов — то, по чему клиент решает, спрашивать ли
+// разрешения у человека. Ошибка здесь тише всего и опаснее всего.
+func TestWriteToolsAreAnnotated(t *testing.T) {
+	session := connect(t, Options{})
+
+	res, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("список инструментов не получен: %v", err)
+	}
+
+	writers := map[string]bool{"add_animal": false, "update_animal": false, "delete_animal": true}
+	for _, tool := range res.Tools {
+		destructive, isWriter := writers[tool.Name]
+		if tool.Annotations == nil {
+			t.Errorf("%s: нет аннотаций", tool.Name)
+			continue
+		}
+		if isWriter {
+			if tool.Annotations.ReadOnlyHint {
+				t.Errorf("%s: помечен как readOnly, хотя меняет базу", tool.Name)
+			}
+			got := tool.Annotations.DestructiveHint != nil && *tool.Annotations.DestructiveHint
+			if got != destructive {
+				t.Errorf("%s: destructiveHint=%v, ожидалось %v", tool.Name, got, destructive)
+			}
+			continue
+		}
+		if !tool.Annotations.ReadOnlyHint {
+			t.Errorf("%s: читающий инструмент не помечен readOnly", tool.Name)
+		}
 	}
 }

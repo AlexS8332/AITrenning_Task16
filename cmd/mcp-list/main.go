@@ -12,7 +12,8 @@
 //
 //	mcp-list                                 # сервер из этого репозитория
 //	mcp-list -schemas                        # плюс полные JSON Schema
-//	mcp-list -call get_animal -args '{"animal":"рысь"}'
+//	mcp-list -i                              # ручной режим: команды с клавиатуры
+//	mcp-list -call get_animal -args 'animal=рысь'
 //	mcp-list -- npx @modelcontextprotocol/server-everything
 package main
 
@@ -80,12 +81,13 @@ func main() {
 	enableUTF8Console()
 
 	var (
-		schemas = flag.Bool("schemas", false, "печатать полные JSON Schema аргументов")
-		call    = flag.String("call", "", "вызвать только этот инструмент")
-		args    = flag.String("args", "{}", "аргументы для -call, JSON-объект")
-		noDemo  = flag.Bool("no-demo", false, "не делать проверочные вызовы, только список инструментов")
-		full    = flag.Bool("full", false, "печатать результаты вызовов целиком, без обрезки")
-		timeout = flag.Duration("timeout", 2*time.Minute, "предельное время работы")
+		schemas  = flag.Bool("schemas", false, "печатать полные JSON Schema аргументов")
+		call     = flag.String("call", "", "вызвать только этот инструмент")
+		args     = flag.String("args", "", "аргументы для -call: JSON-объект или пары ключ=значение")
+		noDemo   = flag.Bool("no-demo", false, "не делать проверочные вызовы, только список инструментов")
+		interact = flag.Bool("i", false, "ручной режим: вводить команды и вызовы с клавиатуры")
+		full     = flag.Bool("full", false, "печатать результаты вызовов целиком, без обрезки")
+		timeout  = flag.Duration("timeout", 2*time.Minute, "предельное время работы")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -109,11 +111,12 @@ func main() {
 	defer cancel()
 
 	if err := run(ctx, command, dir, options{
-		schemas: *schemas,
-		call:    *call,
-		args:    *args,
-		noDemo:  *noDemo,
-		full:    *full,
+		schemas:     *schemas,
+		call:        *call,
+		args:        *args,
+		noDemo:      *noDemo,
+		full:        *full,
+		interactive: *interact,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(1)
@@ -121,11 +124,12 @@ func main() {
 }
 
 type options struct {
-	schemas bool
-	call    string
-	args    string
-	noDemo  bool
-	full    bool
+	schemas     bool
+	call        string
+	args        string
+	noDemo      bool
+	full        bool
+	interactive bool
 }
 
 func run(ctx context.Context, command []string, dir string, o options) error {
@@ -191,11 +195,21 @@ func run(ctx context.Context, command []string, dir string, o options) error {
 	if o.call != "" {
 		fmt.Println()
 		section("Вызов")
-		var arguments map[string]any
-		if err := json.Unmarshal([]byte(o.args), &arguments); err != nil {
-			return fmt.Errorf("-args не разобрались как JSON-объект: %w", err)
+		arguments, err := parseArgs(o.args)
+		if err != nil {
+			return fmt.Errorf("-args: %w", err)
 		}
-		return callTool(ctx, session, o.call, arguments, o.full)
+		if err := callTool(ctx, session, o.call, arguments, o.full); err != nil {
+			return err
+		}
+		if !o.interactive {
+			return nil
+		}
+	}
+
+	// 5. Ручной режим: дальше команды набирает человек.
+	if o.interactive {
+		return repl(ctx, session, tools, o.full)
 	}
 	if o.noDemo {
 		return nil

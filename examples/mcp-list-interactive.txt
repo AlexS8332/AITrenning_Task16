@@ -178,12 +178,206 @@
         language   string  код языка ISO 639-3; по умолчанию rus
       * — обязательный аргумент
 
-Проверочные вызовы
-──────────────────
+Ручной режим
+────────────
+Команды: tools, schema <инструмент>, call <инструмент> [аргументы],
+info, full on|off, help, quit. Имя инструмента можно писать без call.
+Аргументы — JSON-объект или пары ключ=значение: get_animal animal=рысь
 
+>   add_animal        Добавить животное
+  compare_animals   Сравнение животных
+  delete_animal     Удалить животное
+  get_animal        Карточка животного
+  list_animals      Список животных
+  match_taxon       Сверка латинского названия
+  random_animal     Случайное животное
+  read_wikipedia    Чтение статьи Википедии
+  search_animals    Поиск по справочнику
+  search_wikipedia  Поиск в Википедии
+  server_info       Сведения о сервере
+  taxon_tree        Дерево классификации
+  update_animal     Изменить животное
+  vernacular_names  Народные названия
+
+  подробности: schema <инструмент>, вызов: <инструмент> ключ=значение
+
+> 
+ 1. add_animal — Добавить животное
+    Добавляет запись в справочник. Идентификатор должен быть свободен: если он
+    занят, вызов отклоняется, а не переписывает чужую карточку. Изменяет базу
+    данных.
+    аргументы:
+      * class                string        класс: млекопитающие, птицы, рыбы и
+                                           так далее
+      * id                   string        идентификатор латиницей через дефис,
+                                           например snow-leopard
+      * name                 string        русское название
+      * scientific_name      string        латинское (научное) название
+        conservation_status  string        охранный статус МСОП: LC, NT, VU, EN,
+                                           CR, DD
+        description          string        короткое описание
+        diet                 string        тип питания: хищник, травоядное,
+                                           всеядное, насекомоядное
+        family               string        семейство
+        food                 array[string] чем питается
+        habitats             array[string] среды обитания
+        length_cm            object        длина тела в сантиметрах, от и до
+        lifespan_years       integer       продолжительность жизни в годах
+        order                string        отряд
+        regions              array[string] регионы распространения
+        weight_kg            object        вес в килограммах, от и до
+      * — обязательный аргумент
+
+> 
+  → add_animal {"class":"млекопитающие","conservation_status":"NT","diet":"хищник","food":["личинки","черви"],"habitats":["река","озеро"],"id":"platypus","lifespan_years":17,"name":"Утконос","scientific_name":"Ornithorhynchus anatinus","weight_kg":{"max":2.4,"min":0.7}}
+    {
+      "animal": {
+        "class": "млекопитающие",
+        "conservation_status": "NT",
+        "description": "",
+        "diet": "хищник",
+        "family": "",
+        "food": [
+          "личинки",
+          "черви"
+        ],
+        "habitats": [
+          "река",
+          "озеро"
+        ],
+        "id": "platypus",
+        "length_cm": {
+          "max": 0,
+          "min": 0
+        },
+        "lifespan_years": 17,
+        "name": "Утконос",
+        "order": "",
+        "regions": [],
+        "scientific_name": "Ornithorhynchus anatinus",
+        "weight_kg": {
+          "max": 2.4,
+          "min": 0.7
+        }
+      },
+      "animals": 21,
+      "done": "added"
+    }
+
+> 
+  → get_animal {"animal":"Утконос"}
+    {
+      "animal": {
+        "class": "млекопитающие",
+        "conservation_status": "NT",
+        "description": "",
+        "diet": "хищник",
+        "family": "",
+        "food": [
+          "личинки",
+          "черви"
+        ],
+        "habitats": [
+          "река",
+          "озеро"
+        ],
+        "id": "platypus",
+        "length_cm": {
+          "max": 0,
+          "min": 0
+        },
+        "lifespan_years": 17,
+        "name": "Утконос",
+        "order": "",
+        "regions": [],
+        "scientific_name": "Ornithorhynchus anatinus",
+        "weight_kg": {
+          "max": 2.4,
+          "min": 0.7
+        }
+      },
+      "found": true
+    }
+
+> 
+  → compare_animals {"animals":["platypus","lynx"],"fields":["class","diet","weight_kg"]}
+    {
+      "columns": [
+        "Утконос",
+        "Обыкновенная рысь"
+      ],
+      "rows": [
+        {
+          "field": "class",
+          "same": true,
+          "values": [
+            "млекопитающие",
+            "млекопитающие"
+          ]
+        },
+        {
+          "field": "diet",
+          "same": true,
+          "values": [
+            "хищник",
+            "хищник"
+          ]
+        },
+        {
+          "field": "weight_kg",
+          "same": false,
+          "values": [
+            "0.7–2.4",
+            "18–30"
+          ]
+        }
+      ]
+    }
+
+> 
+  → delete_animal {"animal":"platypus"}
+    {
+      "animal": {
+        "class": "млекопитающие",
+        "conservation_status": "NT",
+        "description": "",
+        "diet": "хищник",
+        "family": "",
+        "food": [
+          "личинки",
+          "черви"
+        ],
+        "habitats": [
+          "река",
+          "озеро"
+        ],
+        "id": "platypus",
+        "length_cm": {
+          "max": 0,
+          "min": 0
+        },
+        "lifespan_years": 17,
+        "name": "Утконос",
+        "order": "",
+        "regions": [],
+        "scientific_name": "Ornithorhynchus anatinus",
+        "weight_kg": {
+          "max": 2.4,
+          "min": 0.7
+        }
+      },
+      "animals": 20,
+      "done": "deleted"
+    }
+
+> 
   → server_info {}
     {
       "calls": {
+        "add_animal": 1,
+        "compare_animals": 1,
+        "delete_animal": 1,
+        "get_animal": 1,
         "server_info": 1
       },
       "catalog": {
@@ -198,48 +392,87 @@
           "рыбы"
         ],
         "database": "animals.db",
-    … обрезано (флаг -full покажет целиком)
-
-  → list_animals {"class":"птицы"}
-    {
-      "animals": [
-        {
-          "class": "птицы",
-          "diet": "хищник",
-          "id": "peregrine-falcon",
-          "name": "Сапсан",
-          "scientific_name": "Falco peregrinus"
-        },
-        {
-          "class": "птицы",
-          "diet": "хищник",
-          "id": "eurasian-eagle-owl",
-          "name": "Филин",
-          "scientific_name": "Bubo bubo"
-        },
-    … обрезано (флаг -full покажет целиком)
-
-  → get_animal {"animal":"Lynx lynx"}
-    {
-      "animal": {
-        "class": "млекопитающие",
-        "conservation_status": "LC",
-        "description": "Самая северная из кошек: короткое тело, высокие лапы и кисточки на ушах. Охотится из засады, зимой ходит по насту, не проваливаясь.",
-        "diet": "хищник",
-        "family": "кошачьи",
-        "food": [
-          "зайцы",
-          "косули",
-          "грызуны",
-          "птицы"
+        "diets": [
+          "всеядное",
+          "насекомоядное",
+          "травоядное",
+          "хищник"
         ],
         "habitats": [
+          "арктическое море",
+          "болото",
+          "влажный луг",
+          "вырубка",
+          "высокогорье",
+          "горный лес",
+          "город",
+          "горы",
+          "крупная река",
+          "лес",
+          "лесная опушка",
+          "лиственный лес",
+          "луг",
+          "мелководье",
+          "море",
+          "морское побережье",
+          "озеро",
+          "опушка",
+          "пойменный лес",
+          "поле",
+          "полупустыня",
+          "пруд",
+          "река",
+          "речные долины",
+          "сад",
+          "село",
+          "скалистое морское дно",
+          "скалы",
+          "скальные осыпи",
+          "смешанный лес",
+          "степь",
           "тайга",
-          "смешанный лес"
-    … обрезано (флаг -full покажет целиком)
-
-  → get_animal {"animal":"малая выхухоль"}
-    {
-      "found": false,
-      "hint": "в локальном справочнике такой записи нет; попробуйте list_animals или поиск во внешних источниках через search_wikipedia"
+          "тундра",
+          "устья рек",
+          "хвойно-широколиственный лес"
+        ]
+      },
+      "server": "animals-reference",
+      "sources": [
+        {
+          "base_url": "animals.db",
+          "name": "справочник в SQLite",
+          "needs_network": false
+        },
+        {
+          "base_url": "https://ru.wikipedia.org",
+          "name": "Википедия (русская)",
+          "needs_network": true
+        },
+        {
+          "base_url": "https://api.gbif.org/v1",
+          "name": "GBIF",
+          "needs_network": true
+        }
+      ],
+      "tools": [
+        "add_animal",
+        "compare_animals",
+        "delete_animal",
+        "get_animal",
+        "list_animals",
+        "match_taxon",
+        "random_animal",
+        "read_wikipedia",
+        "search_animals",
+        "search_wikipedia",
+        "server_info",
+        "taxon_tree",
+        "update_animal",
+        "vernacular_names"
+      ],
+      "total_calls": 5,
+      "uptime_seconds": 0,
+      "version": "1.1.0"
     }
+
+> 

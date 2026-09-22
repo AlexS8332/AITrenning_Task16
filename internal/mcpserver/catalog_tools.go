@@ -11,7 +11,10 @@ import (
 // Инструменты локального справочника. Они не ходят в сеть, поэтому
 // сервер остаётся полезным и проверяемым на машине без интернета.
 
-const defaultListLimit = 20
+const (
+	defaultListLimit = 20
+	maxListLimit     = 100
+)
 
 // ListIn — аргументы list_animals.
 type ListIn struct {
@@ -126,29 +129,26 @@ func (s *Server) addCatalogTools() {
 }
 
 func (s *Server) listAnimals(ctx context.Context, req *mcp.CallToolRequest, in ListIn) (*mcp.CallToolResult, ListOut, error) {
-	found := s.cat.Find(catalog.Filter{Class: in.Class, Habitat: in.Habitat})
-
 	limit := in.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
 	}
-	if limit > 100 {
-		limit = 100
-	}
-	offset := in.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(found) {
-		offset = len(found)
-	}
-	end := min(offset+limit, len(found))
+	limit = min(limit, maxListLimit)
+	offset := max(in.Offset, 0)
 
-	page := make([]catalog.Brief, 0, end-offset)
-	for _, a := range found[offset:end] {
-		page = append(page, a.Brief())
+	filter := catalog.Filter{Class: in.Class, Habitat: in.Habitat, Limit: limit, Offset: offset}
+
+	// Выборка страницы и подсчёт всех подходящих — два запроса: сколько
+	// всего нашлось, из самой страницы не видно.
+	total, err := s.cat.CountFiltered(ctx, filter)
+	if err != nil {
+		return nil, ListOut{}, err
 	}
-	return nil, ListOut{Total: len(found), Offset: offset, Count: len(page), Animals: page}, nil
+	page, err := s.cat.Find(ctx, filter)
+	if err != nil {
+		return nil, ListOut{}, err
+	}
+	return nil, ListOut{Total: total, Offset: offset, Count: len(page), Animals: briefs(page)}, nil
 }
 
 func (s *Server) getAnimal(ctx context.Context, req *mcp.CallToolRequest, in GetIn) (*mcp.CallToolResult, GetOut, error) {
@@ -156,13 +156,21 @@ func (s *Server) getAnimal(ctx context.Context, req *mcp.CallToolRequest, in Get
 	if name == "" {
 		return nil, GetOut{}, errf("animal пуст: укажите идентификатор или название животного")
 	}
-	if a, ok := s.cat.Get(name); ok {
+	a, ok, err := s.cat.Get(ctx, name)
+	if err != nil {
+		return nil, GetOut{}, err
+	}
+	if ok {
 		return nil, GetOut{Found: true, Animal: &a}, nil
 	}
 
 	// Не нашли по точному совпадению — отдаём то, что похоже. Так клиент
 	// видит границы справочника и не выдумывает ответ сам.
-	similar := briefs(s.cat.Find(catalog.Filter{Query: name}))
+	found, err := s.cat.Find(ctx, catalog.Filter{Query: name, Limit: maxListLimit})
+	if err != nil {
+		return nil, GetOut{}, err
+	}
+	similar := briefs(found)
 	out := GetOut{
 		Found:   false,
 		Similar: similar,
@@ -175,13 +183,16 @@ func (s *Server) getAnimal(ctx context.Context, req *mcp.CallToolRequest, in Get
 }
 
 func (s *Server) searchAnimals(ctx context.Context, req *mcp.CallToolRequest, in SearchIn) (*mcp.CallToolResult, SearchOut, error) {
-	found := s.cat.Find(catalog.Filter{
+	found, err := s.cat.Find(ctx, catalog.Filter{
 		Query:       in.Query,
 		Diet:        in.Diet,
 		Habitat:     in.Habitat,
 		MinWeightKg: in.MinWeightKg,
 		MaxWeightKg: in.MaxWeightKg,
 	})
+	if err != nil {
+		return nil, SearchOut{}, err
+	}
 	return nil, SearchOut{Count: len(found), Animals: briefs(found)}, nil
 }
 
@@ -193,7 +204,10 @@ func (s *Server) compareAnimals(ctx context.Context, req *mcp.CallToolRequest, i
 	animals := make([]catalog.Animal, 0, len(in.Animals))
 	columns := make([]string, 0, len(in.Animals))
 	for _, name := range in.Animals {
-		a, ok := s.cat.Get(name)
+		a, ok, err := s.cat.Get(ctx, name)
+		if err != nil {
+			return nil, CompareOut{}, err
+		}
 		if !ok {
 			return nil, CompareOut{}, errf("животного «%s» нет в справочнике; список даёт list_animals", name)
 		}
@@ -226,7 +240,11 @@ func (s *Server) compareAnimals(ctx context.Context, req *mcp.CallToolRequest, i
 }
 
 func (s *Server) randomAnimal(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RandomOut, error) {
-	return nil, RandomOut{Animal: s.cat.Random()}, nil
+	a, err := s.cat.Random(ctx)
+	if err != nil {
+		return nil, RandomOut{}, err
+	}
+	return nil, RandomOut{Animal: a}, nil
 }
 
 func briefs(animals []catalog.Animal) []catalog.Brief {

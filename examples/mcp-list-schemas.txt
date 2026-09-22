@@ -5,20 +5,169 @@
 
 Сервер
 ──────
-  имя:         animals-reference 1.0.0
+  имя:         animals-reference 1.1.0
   название:    Справочник по животным
   протокол:    2026-07-28
   умеет:       tools (сообщает об изменениях списка)
-  инструкция:  Сервер отвечает на вопросы о животных. Инструменты с префиксом
-               list_/get_/search_/compare_/random_ работают по локальному
-               справочнику и доступны всегда; wikipedia- и taxon-инструменты
-               ходят в русскую Википедию и в таксономическую базу GBIF и требуют
-               сети.
+  инструкция:  Сервер отвечает на вопросы о животных. Справочник хранится в базе
+               SQLite: инструменты list_/get_/search_/compare_/random_ читают её
+               и работают всегда, add_/update_/delete_animal её меняют.
+               Инструменты wikipedia- и taxon- ходят в русскую Википедию и в
+               таксономическую базу GBIF и требуют сети.
 
-Инструменты (11)
+Инструменты (14)
 ────────────────
 
- 1. compare_animals — Сравнение животных
+ 1. add_animal — Добавить животное
+    Добавляет запись в справочник. Идентификатор должен быть свободен: если он
+    занят, вызов отклоняется, а не переписывает чужую карточку. Изменяет базу
+    данных.
+    аргументы:
+      * class                string        класс: млекопитающие, птицы, рыбы и
+                                           так далее
+      * id                   string        идентификатор латиницей через дефис,
+                                           например snow-leopard
+      * name                 string        русское название
+      * scientific_name      string        латинское (научное) название
+        conservation_status  string        охранный статус МСОП: LC, NT, VU, EN,
+                                           CR, DD
+        description          string        короткое описание
+        diet                 string        тип питания: хищник, травоядное,
+                                           всеядное, насекомоядное
+        family               string        семейство
+        food                 array[string] чем питается
+        habitats             array[string] среды обитания
+        length_cm            object        длина тела в сантиметрах, от и до
+        lifespan_years       integer       продолжительность жизни в годах
+        order                string        отряд
+        regions              array[string] регионы распространения
+        weight_kg            object        вес в килограммах, от и до
+      * — обязательный аргумент
+    схема:
+      {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "description": "класс: млекопитающие, птицы, рыбы и так далее",
+            "type": "string"
+          },
+          "conservation_status": {
+            "description": "охранный статус МСОП: LC, NT, VU, EN, CR, DD",
+            "type": "string"
+          },
+          "description": {
+            "description": "короткое описание",
+            "type": "string"
+          },
+          "diet": {
+            "description": "тип питания: хищник, травоядное, всеядное, насекомоядное",
+            "type": "string"
+          },
+          "family": {
+            "description": "семейство",
+            "type": "string"
+          },
+          "food": {
+            "description": "чем питается",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "habitats": {
+            "description": "среды обитания",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "id": {
+            "description": "идентификатор латиницей через дефис, например snow-leopard",
+            "type": "string"
+          },
+          "length_cm": {
+            "additionalProperties": false,
+            "description": "длина тела в сантиметрах, от и до",
+            "properties": {
+              "max": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "min",
+              "max"
+            ],
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "lifespan_years": {
+            "description": "продолжительность жизни в годах",
+            "type": "integer"
+          },
+          "name": {
+            "description": "русское название",
+            "type": "string"
+          },
+          "order": {
+            "description": "отряд",
+            "type": "string"
+          },
+          "regions": {
+            "description": "регионы распространения",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "scientific_name": {
+            "description": "латинское (научное) название",
+            "type": "string"
+          },
+          "weight_kg": {
+            "additionalProperties": false,
+            "description": "вес в килограммах, от и до",
+            "properties": {
+              "max": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "min",
+              "max"
+            ],
+            "type": [
+              "null",
+              "object"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scientific_name",
+          "class"
+        ],
+        "type": "object"
+      }
+
+ 2. compare_animals — Сравнение животных
     Сравнение двух-четырёх животных справочника по выбранным полям. Возвращает
     таблицу: строка на поле, колонка на животное, с пометкой совпадающих
     значений.
@@ -58,7 +207,28 @@
         "type": "object"
       }
 
- 2. get_animal — Карточка животного
+ 3. delete_animal — Удалить животное
+    Удаляет запись из справочника и возвращает её напоследок. Отменить нельзя:
+    восстановить запись можно только добавив заново. Изменяет базу данных.
+    аргументы:
+      * animal  string идентификатор или название удаляемой записи
+      * — обязательный аргумент
+    схема:
+      {
+        "additionalProperties": false,
+        "properties": {
+          "animal": {
+            "description": "идентификатор или название удаляемой записи",
+            "type": "string"
+          }
+        },
+        "required": [
+          "animal"
+        ],
+        "type": "object"
+      }
+
+ 4. get_animal — Карточка животного
     Полная карточка животного из локального справочника по идентификатору,
     русскому или латинскому названию. Если записи нет, возвращает found=false и
     похожие записи, а не ошибку.
@@ -80,7 +250,7 @@
         "type": "object"
       }
 
- 3. list_animals — Список животных
+ 5. list_animals — Список животных
     Список животных локального справочника с необязательными фильтрами по классу
     и среде обитания. Возвращает краткие записи; подробности даёт get_animal.
     аргументы:
@@ -115,7 +285,7 @@
         "type": "object"
       }
 
- 4. match_taxon — Сверка латинского названия
+ 6. match_taxon — Сверка латинского названия
     Сверка латинского (научного) названия с таксономической базой GBIF.
     Возвращает found, ранг, статус, уверенность и положение в системе. Нечёткое
     совпадение найденным не считается: похожее название не означает то же
@@ -138,7 +308,7 @@
         "type": "object"
       }
 
- 5. random_animal — Случайное животное
+ 7. random_animal — Случайное животное
     Случайная карточка из локального справочника. Аргументов нет.
     аргументов нет
     схема:
@@ -147,7 +317,7 @@
         "type": "object"
       }
 
- 6. read_wikipedia — Чтение статьи Википедии
+ 8. read_wikipedia — Чтение статьи Википедии
     Чтение статьи русской Википедии по точному заголовку. Без section возвращает
     вступление и оглавление, с section — текст этого раздела. Так статья
     читается по частям, а не целиком. Перенаправления раскрываются, итоговый
@@ -177,7 +347,7 @@
         "type": "object"
       }
 
- 7. search_animals — Поиск по справочнику
+ 9. search_animals — Поиск по справочнику
     Поиск по локальному справочнику: свободный запрос, тип питания, среда
     обитания и границы веса. Условия складываются. Вес сравнивается по
     пересечению диапазонов: животное весом 18–30 кг подходит и под
@@ -224,7 +394,7 @@
         "type": "object"
       }
 
- 8. search_wikipedia — Поиск в Википедии
+10. search_wikipedia — Поиск в Википедии
     Поиск статей в русской Википедии по названию животного. Возвращает заголовки
     с фрагментами. Наличие результатов не означает, что статья о запрошенном
     животном есть: сверяйте заголовок с запросом.
@@ -251,7 +421,7 @@
         "type": "object"
       }
 
- 9. server_info — Сведения о сервере
+11. server_info — Сведения о сервере
     Версия сервера, список его инструментов, сводка по локальному справочнику,
     подключённые источники и счётчик вызовов за текущую сессию. Аргументов нет.
     аргументов нет
@@ -261,7 +431,7 @@
         "type": "object"
       }
 
-10. taxon_tree — Дерево классификации
+12. taxon_tree — Дерево классификации
     Дерево классификации таксона из GBIF от царства до самого таксона. Принимает
     usage_key из match_taxon или латинское название — тогда сверка делается
     сама.
@@ -286,7 +456,179 @@
         "type": "object"
       }
 
-11. vernacular_names — Народные названия
+13. update_animal — Изменить животное
+    Меняет поля записи. Переданные поля заменяют прежние значения, остальные
+    остаются как были; списки (habitats, regions, food) заменяются целиком.
+    Изменяет базу данных.
+    аргументы:
+      * animal               string        какую запись менять: идентификатор
+                                           или название
+        class                string        класс
+        conservation_status  string        охранный статус МСОП
+        description          string        короткое описание
+        diet                 string        тип питания
+        family               string        семейство
+        food                 array[string] чем питается; список заменяется
+                                           целиком
+        habitats             array[string] среды обитания; список заменяется
+                                           целиком
+        length_cm            object        длина тела в сантиметрах, от и до
+        lifespan_years       integer       продолжительность жизни в годах
+        name                 string        русское название
+        order                string        отряд
+        regions              array[string] регионы; список заменяется целиком
+        scientific_name      string        латинское название
+        weight_kg            object        вес в килограммах, от и до
+      * — обязательный аргумент
+    схема:
+      {
+        "additionalProperties": false,
+        "properties": {
+          "animal": {
+            "description": "какую запись менять: идентификатор или название",
+            "type": "string"
+          },
+          "class": {
+            "description": "класс",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "conservation_status": {
+            "description": "охранный статус МСОП",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "description": "короткое описание",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "diet": {
+            "description": "тип питания",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "family": {
+            "description": "семейство",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "food": {
+            "description": "чем питается; список заменяется целиком",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "habitats": {
+            "description": "среды обитания; список заменяется целиком",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "length_cm": {
+            "additionalProperties": false,
+            "description": "длина тела в сантиметрах, от и до",
+            "properties": {
+              "max": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "min",
+              "max"
+            ],
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "lifespan_years": {
+            "description": "продолжительность жизни в годах",
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "name": {
+            "description": "русское название",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "order": {
+            "description": "отряд",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "regions": {
+            "description": "регионы; список заменяется целиком",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "scientific_name": {
+            "description": "латинское название",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "weight_kg": {
+            "additionalProperties": false,
+            "description": "вес в килограммах, от и до",
+            "properties": {
+              "max": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "min",
+              "max"
+            ],
+            "type": [
+              "null",
+              "object"
+            ]
+          }
+        },
+        "required": [
+          "animal"
+        ],
+        "type": "object"
+      }
+
+14. vernacular_names — Народные названия
     Народные (обиходные) названия таксона на заданном языке по данным GBIF. По
     умолчанию русский (rus). Позволяет проверить, что русское название
     действительно относится к этому таксону.

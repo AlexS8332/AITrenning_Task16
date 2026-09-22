@@ -65,6 +65,7 @@ func schemaProps(raw json.RawMessage) ([]prop, error) {
 			Items       *struct {
 				Type json.RawMessage `json:"type"`
 			} `json:"items"`
+			Properties json.RawMessage `json:"properties"`
 		}
 		if err := json.Unmarshal(byName[name], &body); err != nil {
 			return nil, fmt.Errorf("свойство %q не разобралось: %w", name, err)
@@ -72,6 +73,13 @@ func schemaProps(raw json.RawMessage) ([]prop, error) {
 		p.Type = typeName(body.Type)
 		if body.Items != nil {
 			p.Type += "[" + typeName(body.Items.Type) + "]"
+		}
+		// У вложенного объекта показываем имена полей: вручную их
+		// задают как weight_kg.min=0.7, и знать их надо заранее.
+		if len(body.Properties) > 0 {
+			if keys, err := objectKeys(body.Properties); err == nil && len(keys) > 0 {
+				p.Type += "{" + strings.Join(keys, ",") + "}"
+			}
 		}
 		p.Description = body.Description
 		for _, v := range body.Enum {

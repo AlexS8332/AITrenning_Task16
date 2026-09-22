@@ -22,11 +22,18 @@ import (
 // Name — имя сервера, которое клиент видит в ответе initialize.
 const Name = "animals-reference"
 
-// Options — из чего собрать сервер. Все поля необязательны: справочник и
-// источники создаются по умолчанию, логгер молчит.
+// MemoryDB — путь для базы, живущей только в памяти процесса.
+const MemoryDB = catalog.MemoryPath
+
+// Options — из чего собрать сервер. Все поля необязательны: база
+// открывается по пути DBPath (по умолчанию — в памяти), источники
+// создаются сами, логгер молчит.
 type Options struct {
-	Version   string
-	Catalog   *catalog.Catalog
+	Version string
+	// Store — уже открытая база. Если не передана, сервер откроет её
+	// сам по DBPath и закроет вместе с собой.
+	Store     *catalog.Store
+	DBPath    string
 	Wikipedia *sources.Wikipedia
 	GBIF      *sources.GBIF
 	Logger    *slog.Logger
@@ -37,7 +44,8 @@ type Options struct {
 // видно, что соединение не просто установлено, а работает.
 type Server struct {
 	mcp     *mcp.Server
-	cat     *catalog.Catalog
+	cat     *catalog.Store
+	ownsDB  bool
 	wiki    *sources.Wikipedia
 	gbif    *sources.GBIF
 	log     *slog.Logger
@@ -49,14 +57,19 @@ type Server struct {
 	calls map[string]int
 }
 
-// New собирает сервер со всеми инструментами.
-func New(o Options) (*Server, error) {
-	cat := o.Catalog
+// New собирает сервер со всеми инструментами и открывает базу.
+func New(ctx context.Context, o Options) (*Server, error) {
+	cat, ownsDB := o.Store, false
 	if cat == nil {
+		path := o.DBPath
+		if path == "" {
+			path = catalog.MemoryPath
+		}
 		var err error
-		if cat, err = catalog.Load(); err != nil {
+		if cat, err = catalog.Open(ctx, path); err != nil {
 			return nil, err
 		}
+		ownsDB = true
 	}
 	wiki, gbif := o.Wikipedia, o.GBIF
 	if wiki == nil || gbif == nil {
@@ -79,6 +92,7 @@ func New(o Options) (*Server, error) {
 
 	s := &Server{
 		cat:     cat,
+		ownsDB:  ownsDB,
 		wiki:    wiki,
 		gbif:    gbif,
 		log:     log,
@@ -91,10 +105,10 @@ func New(o Options) (*Server, error) {
 		Version: version,
 		Title:   "Справочник по животным",
 	}, &mcp.ServerOptions{
-		Instructions: "Сервер отвечает на вопросы о животных. Инструменты с префиксом " +
-			"list_/get_/search_/compare_/random_ работают по локальному справочнику и " +
-			"доступны всегда; wikipedia- и taxon-инструменты ходят в русскую Википедию " +
-			"и в таксономическую базу GBIF и требуют сети.",
+		Instructions: "Сервер отвечает на вопросы о животных. Справочник хранится в базе " +
+			"SQLite: инструменты list_/get_/search_/compare_/random_ читают её и работают " +
+			"всегда, add_/update_/delete_animal её меняют. Инструменты wikipedia- и taxon- " +
+			"ходят в русскую Википедию и в таксономическую базу GBIF и требуют сети.",
 	})
 
 	// Счётчик вызовов и журнал — одним middleware: сервер общается по
@@ -102,9 +116,19 @@ func New(o Options) (*Server, error) {
 	s.mcp.AddReceivingMiddleware(s.countCalls)
 
 	s.addCatalogTools()
+	s.addWriteTools()
 	s.addSourceTools()
 	s.addInfoTool()
 	return s, nil
+}
+
+// Close закрывает базу, если сервер открывал её сам. Переданную извне
+// базу закрывает тот, кто её открыл.
+func (s *Server) Close() error {
+	if s.ownsDB {
+		return s.cat.Close()
+	}
+	return nil
 }
 
 // MCP возвращает сервер SDK: нужен тестам и транспортам.
@@ -160,10 +184,32 @@ type SourceInfo struct {
 
 // CatalogInfo — сводка по локальному справочнику.
 type CatalogInfo struct {
+	Database string   `json:"database" jsonschema:"путь к файлу базы данных"`
 	Animals  int      `json:"animals" jsonschema:"число записей в справочнике"`
 	Classes  []string `json:"classes" jsonschema:"классы животных"`
 	Diets    []string `json:"diets" jsonschema:"типы питания"`
 	Habitats []string `json:"habitats" jsonschema:"среды обитания"`
+}
+
+// catalogInfo собирает сводку по базе. Четыре запроса вместо одного:
+// сводка нужна редко, а читаемость важнее.
+func (s *Server) catalogInfo(ctx context.Context) (CatalogInfo, error) {
+	info := CatalogInfo{Database: s.cat.Path()}
+
+	var err error
+	if info.Animals, err = s.cat.Count(ctx); err != nil {
+		return CatalogInfo{}, err
+	}
+	if info.Classes, err = s.cat.Classes(ctx); err != nil {
+		return CatalogInfo{}, err
+	}
+	if info.Diets, err = s.cat.Diets(ctx); err != nil {
+		return CatalogInfo{}, err
+	}
+	if info.Habitats, err = s.cat.Habitats(ctx); err != nil {
+		return CatalogInfo{}, err
+	}
+	return info, nil
 }
 
 // ServerInfo — результат инструмента server_info.
@@ -187,19 +233,18 @@ func (s *Server) addInfoTool() {
 			"Аргументов нет.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ServerInfo, error) {
+		info, err := s.catalogInfo(ctx)
+		if err != nil {
+			return nil, ServerInfo{}, err
+		}
 		calls, total := s.callStats()
 		return nil, ServerInfo{
 			Server:  Name,
 			Version: s.version,
 			Tools:   s.toolNames(),
-			Catalog: CatalogInfo{
-				Animals:  s.cat.Len(),
-				Classes:  s.cat.Classes(),
-				Diets:    s.cat.Diets(),
-				Habitats: s.cat.Habitats(),
-			},
+			Catalog: info,
 			Sources: []SourceInfo{
-				{Name: "локальный справочник", BaseURL: "", NeedsNet: false},
+				{Name: "справочник в SQLite", BaseURL: s.cat.Path(), NeedsNet: false},
 				{Name: "Википедия (русская)", BaseURL: s.wiki.Base, NeedsNet: true},
 				{Name: "GBIF", BaseURL: s.gbif.Base, NeedsNet: true},
 			},
